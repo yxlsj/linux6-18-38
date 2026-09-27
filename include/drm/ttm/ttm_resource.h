@@ -194,7 +194,7 @@ struct ttm_resource_manager {
 	bool use_tt;
 	struct ttm_device *bdev;
 	uint64_t size;
-	const struct ttm_resource_manager_func *func;
+	const struct ttm_resource_manager_func *func;			//核心分配回调，根据类型挂载amdgpu_gtt_mgr_func 或 amdgpu_vram_mgr_func
 	spinlock_t move_lock;
 
 	/*
@@ -205,7 +205,7 @@ struct ttm_resource_manager {
 	/*
 	 * Protected by the bdev->lru_lock.
 	 */
-	struct list_head lru[TTM_MAX_BO_PRIORITY];
+	struct list_head lru[TTM_MAX_BO_PRIORITY];					//优先级链表，用于挂载各种优先级的ttm_resource（ttm_resource_init函数里面）
 
 	/**
 	 * @usage: How much of the resources are used, protected by the
@@ -251,6 +251,13 @@ struct ttm_bus_placement {
  * buffer object.
  */
 struct ttm_resource {
+	/**
+	 * system：start无意义,通常是0
+	 * GTT：表示GTT地址空间偏移
+	 * VRAM：
+	 * 		1、如果bo下的block是连续的，则start等于该bo的起始地址
+	 * 		2、如果bo下的block是离散的。start==0，该bo处于cpu visible区域，可以mmap；如果start > 0,则该bo跨过了visible区域，CPU无法访问这块区域
+	 */
 	unsigned long start;
 	size_t size;
 	uint32_t mem_type;

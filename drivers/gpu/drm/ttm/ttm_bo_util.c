@@ -56,7 +56,7 @@ int ttm_mem_io_reserve(struct ttm_device *bdev,
 	if (!bdev->funcs->io_mem_reserve)
 		return 0;
 
-	return bdev->funcs->io_mem_reserve(bdev, mem);
+	return bdev->funcs->io_mem_reserve(bdev, mem);			//amd下：amdgpu_ttm_io_mem_reserve
 }
 
 void ttm_mem_io_free(struct ttm_device *bdev,

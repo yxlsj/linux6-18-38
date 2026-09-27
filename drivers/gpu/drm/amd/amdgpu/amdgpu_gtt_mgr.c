@@ -110,6 +110,7 @@ bool amdgpu_gtt_mgr_has_gart_addr(struct ttm_resource *res)
  *
  * Dummy, allocate the node but no space for it yet.
  */
+//在GTT域上分配bo所需要的物理内存ttm_resource
 static int amdgpu_gtt_mgr_new(struct ttm_resource_manager *man,
 			      struct ttm_buffer_object *tbo,
 			      const struct ttm_place *place,
@@ -131,7 +132,7 @@ static int amdgpu_gtt_mgr_new(struct ttm_resource_manager *man,
 		goto err_free;
 	}
 
-	if (place->lpfn) {
+	if (place->lpfn) {						//指定了范围则在对应的range内分配，否则随机分配
 		spin_lock(&mgr->lock);
 		r = drm_mm_insert_node_in_range(&mgr->mm, &node->mm_nodes[0],
 						num_pages, tbo->page_alignment,
@@ -272,23 +273,28 @@ static const struct ttm_resource_manager_func amdgpu_gtt_mgr_func = {
  *
  * Allocate and initialize the GTT manager.
  */
+//初始化GTT的内存分配管理器(ttm_resource_manager类)
 int amdgpu_gtt_mgr_init(struct amdgpu_device *adev, uint64_t gtt_size)
 {
 	struct amdgpu_gtt_mgr *mgr = &adev->mman.gtt_mgr;
 	struct ttm_resource_manager *man = &mgr->manager;
 	uint64_t start, size;
 
+	//1、初始化gtt对应的manager
 	man->use_tt = true;
 	man->func = &amdgpu_gtt_mgr_func;
-
 	ttm_resource_manager_init(man, &adev->mman.bdev, gtt_size);
 
-	start = AMDGPU_GTT_MAX_TRANSFER_SIZE * AMDGPU_GTT_NUM_TRANSFER_WINDOWS;
-	size = (adev->gmc.gart_size >> PAGE_SHIFT) - start;
-	drm_mm_init(&mgr->mm, start, size);
+
+	//2、drm_mm相关初始化
+	start = AMDGPU_GTT_MAX_TRANSFER_SIZE * AMDGPU_GTT_NUM_TRANSFER_WINDOWS;			//预留的部分地址，因此要减去。新版本7.3下已经删除预留了
+	size = (adev->gmc.gart_size >> PAGE_SHIFT) - start;								
+	drm_mm_init(&mgr->mm, start, size);											//新版写法：drm_mm_init(&mgr->mm, 0, adev->gmc.gart_size >> PAGE_SHIFT);
 	spin_lock_init(&mgr->lock);
 
-	ttm_set_driver_manager(&adev->mman.bdev, TTM_PL_TT, &mgr->manager);
+
+	//3、将GTT manager绑定注册到TTM框架里面
+	ttm_set_driver_manager(&adev->mman.bdev, TTM_PL_TT, &mgr->manager);			
 	ttm_resource_manager_set_used(man, true);
 	return 0;
 }

@@ -1255,7 +1255,7 @@ int amdgpu_mode_dumb_create(struct drm_file *file_priv,
 	 * create the buffer.
 	 */
 	if (adev->mman.buffer_funcs_enabled)
-		flags |= AMDGPU_GEM_CREATE_VRAM_CLEARED;
+		flags |= AMDGPU_GEM_CREATE_VRAM_CLEARED;								
 
 	args->pitch = amdgpu_gem_align_pitch(adev, args->width,
 					     DIV_ROUND_UP(args->bpp, 8), 0);

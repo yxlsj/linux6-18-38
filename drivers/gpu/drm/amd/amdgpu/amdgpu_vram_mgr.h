@@ -57,11 +57,13 @@ struct amdgpu_vram_mgr_resource {
 	struct amdgpu_vres_task task;
 };
 
+//获取单个vram block的start起始地址
 static inline u64 amdgpu_vram_mgr_block_start(struct drm_buddy_block *block)
 {
 	return drm_buddy_block_offset(block);
 }
 
+//获取单个vram block的大小
 static inline u64 amdgpu_vram_mgr_block_size(struct drm_buddy_block *block)
 {
 	return (u64)PAGE_SIZE << drm_buddy_block_order(block);

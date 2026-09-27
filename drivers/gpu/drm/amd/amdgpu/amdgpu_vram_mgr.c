@@ -79,6 +79,7 @@ static inline bool amdgpu_is_vram_mgr_blocks_contiguous(struct list_head *head)
 	return true;
 }
 
+//获取所有分配到的vram block的总大小。和另一个函数amdgpu_vram_mgr_block_size区分开来（一个vram block 一般是多个 drm block组成）
 static inline u64 amdgpu_vram_mgr_blocks_size(struct list_head *head)
 {
 	struct drm_buddy_block *block;
@@ -438,6 +439,7 @@ out:
  *
  * Allocate VRAM for the given BO.
  */
+//YXLSJ--ttm：该函数用于分配bo背后的实际VRAM物理资源（ttm_resource）
 static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 			       struct ttm_buffer_object *tbo,
 			       const struct ttm_place *place,
@@ -457,7 +459,7 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 
 	lpfn = (u64)place->lpfn << PAGE_SHIFT;
 	if (!lpfn || lpfn > man->size)
-		lpfn = man->size;
+		lpfn = man->size;								//一般place->lpfn为0,这里就对齐为manager管理的size
 
 	fpfn = (u64)place->fpfn << PAGE_SHIFT;
 
@@ -472,17 +474,17 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 		pages_per_block = HPAGE_PMD_NR;
 #else
 		/* default to 2MB */
-		pages_per_block = 2UL << (20UL - PAGE_SHIFT);
-#endif
+		pages_per_block = 2UL << (20UL - PAGE_SHIFT);		//单位是page，因此 2 ^ (8+1) * 4kB = 2MB
+#endif														//VRAM里面，实际的资源是以block为单位组织的，这里的默认block大小就是2MB
 		pages_per_block = max_t(u32, pages_per_block,
 					tbo->page_alignment);
 	}
 
-	vres = kzalloc(sizeof(*vres), GFP_KERNEL);
+	vres = kzalloc(sizeof(*vres), GFP_KERNEL);				//1.1、分配ttm_source等对象
 	if (!vres)
 		return -ENOMEM;
 
-	ttm_resource_init(tbo, place, &vres->base);
+	ttm_resource_init(tbo, place, &vres->base);				//1.2、初始化成员 + 将ttm_source对象挂到manager或者bdev的链表上方便管理
 
 	/* bail out quickly if there's likely not enough VRAM for this BO */
 	if (ttm_resource_manager_usage(man) > max_bytes) {
@@ -510,6 +512,7 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 		adjust_dcc_size = amdgpu_gmc_get_dcc_alignment(adev);
 
 	remaining_size = (u64)vres->base.size;
+
 	if (bo->flags & AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS && adjust_dcc_size) {
 		unsigned int dcc_size;
 
@@ -520,7 +523,7 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 	}
 
 	mutex_lock(&mgr->lock);
-	while (remaining_size) {
+	while (remaining_size) {										//2.1、把需要分配的大小，划分为一个又一个block，每次分配一个block大小
 		if (tbo->page_alignment)
 			min_block_size = (u64)tbo->page_alignment << PAGE_SHIFT;
 		else
@@ -541,7 +544,7 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 					   size,
 					   min_block_size,
 					   &vres->blocks,
-					   vres->flags);
+					   vres->flags);								//2.2、分配VRAM物理块block，分配结果存放在vres->blocks
 
 		if (unlikely(r == -ENOSPC) && pages_per_block == ~0ul &&
 		    !(place->flags & TTM_PL_FLAG_CONTIGUOUS)) {
@@ -562,8 +565,8 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 	}
 
 	vres->task.pid = task_pid_nr(current);
-	get_task_comm(vres->task.comm, current);
-	list_add_tail(&vres->vres_node, &mgr->allocated_vres_list);
+	get_task_comm(vres->task.comm, current);						//获取进程的name，存放到comm中
+	list_add_tail(&vres->vres_node, &mgr->allocated_vres_list);		//将vres挂到mgr上
 
 	if (bo->flags & AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS && adjust_dcc_size) {
 		struct drm_buddy_block *dcc_block;
@@ -582,6 +585,8 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 	}
 	mutex_unlock(&mgr->lock);
 
+
+	//下面这段代码很诡异，没看懂。AI说是在计算CPU visible相关的，但是太晦涩了看不懂
 	vres->base.start = 0;
 	size = max_t(u64, amdgpu_vram_mgr_blocks_size(&vres->blocks),
 		     vres->base.size);
@@ -601,6 +606,8 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 		vis_usage += amdgpu_vram_mgr_vis_size(adev, block);
 	}
 
+
+	
 	if (amdgpu_is_vram_mgr_blocks_contiguous(&vres->blocks))
 		vres->base.placement |= TTM_PL_FLAG_CONTIGUOUS;
 

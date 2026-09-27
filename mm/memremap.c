@@ -187,7 +187,7 @@ static int pagemap_range(struct dev_pagemap *pgmap, struct mhp_params *params,
 	if (nid < 0)
 		nid = numa_mem_id();
 
-	//由于追踪记录pgprot
+	//用于追踪记录pgprot
 	error = pfnmap_track(PHYS_PFN(range->start), range_len(range),
 			     &params->pgprot);
 	if (error)

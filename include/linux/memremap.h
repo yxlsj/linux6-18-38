@@ -127,7 +127,7 @@ struct dev_pagemap_ops {
 struct dev_pagemap {
 	struct vmem_altmap altmap;
 	struct percpu_ref ref;
-	struct completion done;
+	struct completion done;				//完成标志。当ref引用计数为0时，标记为done，表示该pgmap可以被销毁了（注销路径回等待该done）
 	enum memory_type type;				//类型，PRIVATE/COHERENT/...
 	unsigned int flags;
 	unsigned long vmemmap_shift;

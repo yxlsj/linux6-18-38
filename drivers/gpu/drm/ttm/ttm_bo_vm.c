@@ -89,9 +89,9 @@ static unsigned long ttm_bo_io_mem_pfn(struct ttm_buffer_object *bo,
 	struct ttm_device *bdev = bo->bdev;
 
 	if (bdev->funcs->io_mem_pfn)
-		return bdev->funcs->io_mem_pfn(bo, page_offset);
+		return bdev->funcs->io_mem_pfn(bo, page_offset);			//amd下：amdgpu_ttm_io_mem_pfn
 
-	return (bo->resource->bus.offset >> PAGE_SHIFT) + page_offset;
+	return (bo->resource->bus.offset >> PAGE_SHIFT) + page_offset;	//前者就是bo所在的PCIE aperture基地址的pfn，加上page_offset就是bo内部的偏移
 }
 
 /**
@@ -205,7 +205,7 @@ vm_fault_t ttm_bo_vm_fault_reserved(struct vm_fault *vmf,
 	if (unlikely(ret != 0))
 		return ret;
 
-	err = ttm_mem_io_reserve(bdev, bo->resource);	//预留I/O memory：为 VRAM等后端存储(backing)建立bus可访问信息
+	err = ttm_mem_io_reserve(bdev, bo->resource);	//预留I/O memory：计算出BO所在的CPU IO地址，存放到ttm_resource->bus.offset中
 	if (unlikely(err != 0))
 		return VM_FAULT_SIGBUS;
 
@@ -243,11 +243,12 @@ vm_fault_t ttm_bo_vm_fault_reserved(struct vm_fault *vmf,
 	 * Speculatively prefault a number of pages. Only error on
 	 * first page.
 	 */
-	for (i = 0; i < num_prefault; ++i) {
+	for (i = 0; i < num_prefault; ++i) {					//每次只处理一个page，因此while循环，num_
+
 		if (bo->resource->bus.is_iomem) {					//VRAM后端分支
 			pfn = ttm_bo_io_mem_pfn(bo, page_offset);		//2、因为要CPU可见，因此分配的区域会落在PCIE BAR空间中（BAR aperture PFN），即对应的IO空间
 
-		} else {											//SYSTEM / GTT 后端分支
+		} else {											//GTT 后端分支
 			page = ttm->pages[page_offset];					//2.1、从ttm_tt页表中拿到page
 			if (unlikely(!page && i == 0)) {
 				return VM_FAULT_OOM;
