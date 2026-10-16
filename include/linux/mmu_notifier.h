@@ -246,11 +246,11 @@ struct mmu_interval_notifier_ops {
 };
 
 struct mmu_interval_notifier {
-	struct interval_tree_node interval_tree;
-	const struct mmu_interval_notifier_ops *ops;
+	struct interval_tree_node interval_tree;			//idle path：作为node添加进入mm->notifier_subscriptions->itree
+	const struct mmu_interval_notifier_ops *ops;		//驱动实现的"失效"回调
 	struct mm_struct *mm;
-	struct hlist_node deferred_item;
-	unsigned long invalidate_seq;
+	struct hlist_node deferred_item;					//busy path：作为node添加进入延迟队列mm->notifier_subscriptions->deferred_list,等待后续处理
+	unsigned long invalidate_seq;						//区间序列号，与全局序列号区分开来
 };
 
 #ifdef CONFIG_MMU_NOTIFIER
@@ -263,8 +263,8 @@ struct mmu_notifier_range {
 	struct mm_struct *mm;
 	unsigned long start;
 	unsigned long end;
-	unsigned flags;
-	enum mmu_notifier_event event;
+	unsigned flags;				//MMU_NOTIFIER_RANGE_BLOCKABLE，表示产生此次通知的操作是否允许被阻塞（即CPU修改页表操作是否允许被阻塞）
+	enum mmu_notifier_event event;		//表示触发此次通知的操作类型（如unmap、clear、protection change等）
 	void *owner;
 };
 

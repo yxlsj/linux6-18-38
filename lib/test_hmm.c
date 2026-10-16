@@ -314,16 +314,17 @@ static bool dmirror_interval_invalidate(struct mmu_interval_notifier *mni,
 	 * Ignore invalidation callbacks for device private pages since
 	 * the invalidation is handled as part of the migration process.
 	 */
-	if (range->event == MMU_NOTIFY_MIGRATE &&
-	    range->owner == dmirror->mdevice)
+	//这里的逻辑是：如果是当前device自己发起的迁移（MIGRATE），则不需要通知自己了，直接返回true（因为当前函数本身的工作就是通知当前device页表需要失效）
+	//自己触发的操作则自己已经掌握相关的信息了，不需要再继续进行后续逻辑，避免重复逻辑
+	if (range->event == MMU_NOTIFY_MIGRATE && range->owner == dmirror->mdevice)
 		return true;
 
-	if (mmu_notifier_range_blockable(range))
+	if (mmu_notifier_range_blockable(range))				//此次通知请求必须是可阻塞的，如果是non-blockable的，直接返回false
 		mutex_lock(&dmirror->mutex);
 	else if (!mutex_trylock(&dmirror->mutex))
 		return false;
 
-	mmu_interval_set_seq(mni, cur_seq);
+	mmu_interval_set_seq(mni, cur_seq);						//设置当前interval notifier的seq为当前的cur_seq
 	dmirror_do_update(dmirror, range->start, range->end);
 
 	mutex_unlock(&dmirror->mutex);
@@ -558,7 +559,7 @@ static int dmirror_allocate_chunk(struct dmirror_device *mdevice,
 	switch (mdevice->zone_device_type) {
 	case HMM_DMIRROR_MEMORY_DEVICE_PRIVATE:
 		res = request_free_mem_region(&iomem_resource, DEVMEM_CHUNK_SIZE,
-					      "hmm_dmirror");									//分配一段I/O内存地址，存放到struct resource对象中
+					      "hmm_dmirror");									//分配一段I/O内存地址，大小为DEVMEM_CHUNK_SIZE，存放到struct resource对象中
 		if (IS_ERR_OR_NULL(res))
 			goto err_devmem;
 		devmem->pagemap.range.start = res->start;
@@ -598,6 +599,7 @@ static int dmirror_allocate_chunk(struct dmirror_device *mdevice,
 		mdevice->devmem_capacity = new_capacity;
 		mdevice->devmem_chunks = new_chunks;
 	}
+
 	//建立device类型的struct page
 	ptr = memremap_pages(&devmem->pagemap, numa_node_id());
 	if (IS_ERR_OR_NULL(ptr)) {
@@ -625,7 +627,7 @@ static int dmirror_allocate_chunk(struct dmirror_device *mdevice,
 	for (pfn = pfn_first; pfn < pfn_last; pfn++) {
 		struct page *page = pfn_to_page(pfn);
 
-		page->zone_device_data = mdevice->free_pages;
+		page->zone_device_data = mdevice->free_pages;			//单向链表组织好各个page
 		mdevice->free_pages = page;
 	}
 	if (ppage) {
@@ -1493,23 +1495,22 @@ static int __init hmm_dmirror_init(void)
 	int id = 0;
 	int ndevices = 0;
 
-	ret = alloc_chrdev_region(&dmirror_dev, 0, DMIRROR_NDEVICES,
-				  "HMM_DMIRROR");
+	ret = alloc_chrdev_region(&dmirror_dev, 0, DMIRROR_NDEVICES,  "HMM_DMIRROR");		//分配设备号，其中一个主设备号，4个次设备号，对应4个设备
 	if (ret)
 		goto err_unreg;
 
 	memset(dmirror_devices, 0, DMIRROR_NDEVICES * sizeof(dmirror_devices[0]));
 	dmirror_devices[ndevices++].zone_device_type =
-				HMM_DMIRROR_MEMORY_DEVICE_PRIVATE;
+				HMM_DMIRROR_MEMORY_DEVICE_PRIVATE;			
 	dmirror_devices[ndevices++].zone_device_type =
 				HMM_DMIRROR_MEMORY_DEVICE_PRIVATE;
-	if (spm_addr_dev0 && spm_addr_dev1) {					//没看懂这个分支在干嘛
+	if (spm_addr_dev0 && spm_addr_dev1) {					//对于coherent类型的设备
 		dmirror_devices[ndevices++].zone_device_type =
 					HMM_DMIRROR_MEMORY_DEVICE_COHERENT;
 		dmirror_devices[ndevices++].zone_device_type =
 					HMM_DMIRROR_MEMORY_DEVICE_COHERENT;
 	}
-	for (id = 0; id < ndevices; id++) {
+	for (id = 0; id < ndevices; id++) {							//一个4个设备，逐个初始化
 		ret = dmirror_device_init(dmirror_devices + id, id);
 		if (ret)
 			goto err_chrdev;

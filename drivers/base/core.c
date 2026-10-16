@@ -3662,7 +3662,7 @@ int device_add(struct device *dev)
 		if (error)
 			goto SysEntryError;
 
-		devtmpfs_create_node(dev);
+		devtmpfs_create_node(dev);						//创建节点
 	}
 
 	/* Notify clients of device addition.  This call must come

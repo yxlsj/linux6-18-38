@@ -62,6 +62,7 @@ void chrdev_show(struct seq_file *f, off_t offset)
 
 #endif /* CONFIG_PROC_FS */
 
+//遍历所有设备号，然后分配一个为被使用的设备号
 static int find_dynamic_major(void)
 {
 	int i;
@@ -120,7 +121,7 @@ __register_chrdev_region(unsigned int major, unsigned int baseminor,
 	mutex_lock(&chrdevs_lock);
 
 	if (major == 0) {
-		ret = find_dynamic_major();
+		ret = find_dynamic_major();					//分配一个major主设备号
 		if (ret < 0) {
 			pr_err("CHRDEV \"%s\" dynamic allocation region is full\n",
 			       name);

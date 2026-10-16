@@ -167,7 +167,7 @@ static int pagemap_range(struct dev_pagemap *pgmap, struct mhp_params *params,
 		return -ENOMEM;
 	}
 
-	//改函数检查resource是否重叠(或者说是否覆盖system RAM)
+	//该函数检查resource是否重叠(或者说是否覆盖system RAM)
 	is_ram = region_intersects(range->start, range_len(range),	IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE);
 
 	//DISJOINT是完全不重叠
@@ -246,7 +246,8 @@ static int pagemap_range(struct dev_pagemap *pgmap, struct mhp_params *params,
 	 * Initialization of the pages has been deferred until now in order
 	 * to allow us to do the work while not holding the hotplug lock.
 	 */
-	//最后调用该函数，遍历这段range里面的所有PFN，初始化每个page。这一步后每个device page就拥有了struct page
+	//最后调用该函数，遍历这段range里面的所有PFN，初始化每个struct page对象（初始化基础信息，并且将refcount = 0）。这一步后每个device page就正式拥有了struct page省份
+	//注意，每个struct page初始化完成后的refcount=0,后续调用分配函数zone_device_page_init()时才会增加refcount
 	memmap_init_zone_device(&NODE_DATA(nid)->node_zones[ZONE_DEVICE],
 				PHYS_PFN(range->start),
 				PHYS_PFN(range_len(range)), pgmap);

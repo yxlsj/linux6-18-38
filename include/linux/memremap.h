@@ -66,7 +66,7 @@ struct vmem_altmap {
  * Device memory residing in a PCI BAR intended for use with Peer-to-Peer
  * transactions.
  */
-enum memory_type {
+enum memory_type {			
 	/* 0 is reserved to catch uninitialized type fields */
 	MEMORY_DEVICE_PRIVATE = 1,
 	MEMORY_DEVICE_COHERENT,
@@ -81,13 +81,13 @@ struct dev_pagemap_ops {
 	 * reset to one by the core code after the method is called to prepare
 	 * for handing out the page again.
 	 */
-	void (*page_free)(struct page *page);
+	void (*page_free)(struct page *page);							//page_free/folio_free：当页引用计数为0时调用，释放页资源。
 
 	/*
 	 * Used for private (un-addressable) device memory only.  Must migrate
 	 * the page back to a CPU accessible page.
 	 */
-	vm_fault_t (*migrate_to_ram)(struct vm_fault *vmf);
+	vm_fault_t (*migrate_to_ram)(struct vm_fault *vmf);				//migrate_to_ram：当CPU访问private page时，将设备内存迁移到系统内存中。
 
 	/*
 	 * Handle the memory failure happens on a range of pfns.  Notify the
@@ -125,17 +125,25 @@ struct dev_pagemap_ops {
  * @ranges: array of ranges to be mapped when nr_range > 1
  */
 struct dev_pagemap {
-	struct vmem_altmap altmap;
+
+	//默认情况下，即altmap = NULL,此时device page的struct page对象是存储在DRAM中的vmemmap中；如果不为NULL，则可以让device利用自己的内存来存储一部分vmemmap meatdata
+	struct vmem_altmap altmap;			//允许device利用自己的内存来存储一部分vmemmap meatdata
+
+	//生命周期管理
 	struct percpu_ref ref;
 	struct completion done;				//完成标志。当ref引用计数为0时，标记为done，表示该pgmap可以被销毁了（注销路径回等待该done）
+	
+	
 	enum memory_type type;				//类型，PRIVATE/COHERENT/...
 	unsigned int flags;
-	unsigned long vmemmap_shift;
-	const struct dev_pagemap_ops *ops;
+	unsigned long vmemmap_shift;		//是否用更大粒度的compound page来表示vmemmap。0表示用base page来表示vmemmap，>0表示用更大粒度的compound struct page来表示vmemmap
+
+
+	const struct dev_pagemap_ops *ops;	//驱动自定义回调
 	void *owner;						//此ZONE_DEVICE的owner，
 	int nr_range;
 	union {
-		struct range range;
+		struct range range;				//range/ranges：设备所属的那一段<物理>内存区域
 		DECLARE_FLEX_ARRAY(struct range, ranges);	//柔性数组
 	};
 };

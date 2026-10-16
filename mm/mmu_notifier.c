@@ -38,13 +38,21 @@ struct lockdep_map __mmu_notifier_invalidate_range_start_map = {
  */
 struct mmu_notifier_subscriptions {
 	/* all mmu notifiers registered in this mm are queued in this list */
-	struct hlist_head list;
-	bool has_itree;
+	struct hlist_head list;											//组织mmu_notifier的链表头
+	struct rb_root_cached itree;									//组织存储mmu_interval_notifier的红黑树
+
+
+	bool has_itree;													//如果存在mmu_interval_notifier被注册,则该值为true,否则为false
 	/* to serialize the list modifications and hlist_unhashed */
-	spinlock_t lock;
-	unsigned long invalidate_seq;
-	unsigned long active_invalidate_ranges;
-	struct rb_root_cached itree;
+	spinlock_t lock;												//自旋锁，所有对mmu_notifier_subscriptions的修改都需要获取该锁
+																	//该锁粒度是线程，因为notifier机制是在统一mm内部，不存在进程之间的交互
+
+
+	//作用于interval notifier的“失效”计数
+	unsigned long invalidate_seq;									//全局的“失效”序列号。值为奇数表示当前有“失效”操作(interval invalidation)正在进行，值为偶数表示当前没有"失效"操作正在进行
+	unsigned long active_invalidate_ranges;							//当前正在进行的、活跃的“失效”的interval notifier的数量，计数器
+
+	//等待队列和延迟处理列表
 	wait_queue_head_t wq;
 	struct hlist_head deferred_list;
 };
@@ -89,7 +97,7 @@ static bool
 mn_itree_is_invalidating(struct mmu_notifier_subscriptions *subscriptions)
 {
 	lockdep_assert_held(&subscriptions->lock);
-	return subscriptions->invalidate_seq & 1;
+	return subscriptions->invalidate_seq & 1;				//判断全局“失效”序列号是否为奇数，是返回true，否则false
 }
 
 static struct mmu_interval_notifier *
@@ -101,16 +109,16 @@ mn_itree_inv_start_range(struct mmu_notifier_subscriptions *subscriptions,
 	struct mmu_interval_notifier *res = NULL;
 
 	spin_lock(&subscriptions->lock);
-	subscriptions->active_invalidate_ranges++;
+	subscriptions->active_invalidate_ranges++;				//1、全局的active_invalidate_ranges计数器+1，表示当前有一个新的“失效”操作正在进行
 	node = interval_tree_iter_first(&subscriptions->itree, range->start,
 					range->end - 1);
 	if (node) {
-		subscriptions->invalidate_seq |= 1;
+		subscriptions->invalidate_seq |= 1;					//2、全局的invalidate_seq序列号置为奇数，表示当前有“失效”操作正在进行
 		res = container_of(node, struct mmu_interval_notifier,
 				   interval_tree);
 	}
 
-	*seq = subscriptions->invalidate_seq;
+	*seq = subscriptions->invalidate_seq;					//3、当前的seq序列号（跟全局的seq序列号独立）
 	spin_unlock(&subscriptions->lock);
 	return res;
 }
@@ -133,9 +141,10 @@ static void mn_itree_inv_end(struct mmu_notifier_subscriptions *subscriptions)
 	struct mmu_interval_notifier *interval_sub;
 	struct hlist_node *next;
 
+
+	//这里是在判断当前“失效”操作是否是最后一个“失效”操作。如果不是就怎么都不做；如果是才会进入后续的回收环节
 	spin_lock(&subscriptions->lock);
-	if (--subscriptions->active_invalidate_ranges ||
-	    !mn_itree_is_invalidating(subscriptions)) {
+	if (--subscriptions->active_invalidate_ranges || !mn_itree_is_invalidating(subscriptions)) {
 		spin_unlock(&subscriptions->lock);
 		return;
 	}
@@ -234,7 +243,7 @@ mmu_interval_read_begin(struct mmu_interval_notifier *interval_sub)
 	spin_lock(&subscriptions->lock);
 	/* Pairs with the WRITE_ONCE in mmu_interval_set_seq() */
 	seq = READ_ONCE(interval_sub->invalidate_seq);
-	is_invalidating = seq == subscriptions->invalidate_seq;
+	is_invalidating = seq == subscriptions->invalidate_seq;				//如果当前interval notifier的seq == 全局的seq，则说明正在执行“失效”操作
 	spin_unlock(&subscriptions->lock);
 
 	/*
@@ -248,7 +257,7 @@ mmu_interval_read_begin(struct mmu_interval_notifier *interval_sub)
 	lock_map_release(&__mmu_notifier_invalidate_range_start_map);
 	if (is_invalidating)
 		wait_event(subscriptions->wq,
-			   READ_ONCE(subscriptions->invalidate_seq) != seq);
+			   READ_ONCE(subscriptions->invalidate_seq) != seq);		//如果全局seq != 当前seq，则将当前进程挂起（即添加到wq等待队列中，睡眠阻塞，直到其他进程通过wake_up_all()唤醒）
 
 	/*
 	 * Notice that mmu_interval_read_retry() can already be true at this
@@ -432,14 +441,16 @@ static int mn_itree_invalidate(struct mmu_notifier_subscriptions *subscriptions,
 	struct mmu_interval_notifier *interval_sub;
 	unsigned long cur_seq;
 
-	for (interval_sub =
-		     mn_itree_inv_start_range(subscriptions, range, &cur_seq);
+
+	//这里就是遍历迭代每个与range范围有交集的interval notifier，并调用其ops->invalidate()方法
+	//其中函数mn_itree_start和next本质都是获取node（即为interval notifier）。
+	//但是start函数获取第一个node后，会将全局(mm->notifier_subscriptions)的invalidate_seq设置为奇数，并将全局的active_invalidate_ranges++，标志着当前有“失效“操作正在进行
+	for (interval_sub = mn_itree_inv_start_range(subscriptions, range, &cur_seq);
 	     interval_sub;
 	     interval_sub = mn_itree_inv_next(interval_sub, range)) {
 		bool ret;
 
-		ret = interval_sub->ops->invalidate(interval_sub, range,
-						    cur_seq);
+		ret = interval_sub->ops->invalidate(interval_sub, range, cur_seq);			//调用interval notifier的ops->invalidate进行内部“失效”处理
 		if (!ret) {
 			if (WARN_ON(mmu_notifier_range_blockable(range)))
 				continue;
@@ -524,12 +535,12 @@ int __mmu_notifier_invalidate_range_start(struct mmu_notifier_range *range)
 		range->mm->notifier_subscriptions;
 	int ret;
 
-	if (subscriptions->has_itree) {
+	if (subscriptions->has_itree) {												//interval notifier的处理分支
 		ret = mn_itree_invalidate(subscriptions, range);
 		if (ret)
 			return ret;
 	}
-	if (!hlist_empty(&subscriptions->list))
+	if (!hlist_empty(&subscriptions->list))										//传统mm notifier的处理分支
 		return mn_hlist_invalidate_range_start(subscriptions, range);
 	return 0;
 }
@@ -563,7 +574,7 @@ void __mmu_notifier_invalidate_range_end(struct mmu_notifier_range *range)
 
 	lock_map_acquire(&__mmu_notifier_invalidate_range_start_map);
 	if (subscriptions->has_itree)
-		mn_itree_inv_end(subscriptions);
+		mn_itree_inv_end(subscriptions);							//处理所有在deferred_list中的interval notifier
 
 	if (!hlist_empty(&subscriptions->list))
 		mn_hlist_invalidate_end(subscriptions, range);
@@ -662,10 +673,10 @@ int __mmu_notifier_register(struct mmu_notifier *subscription,
 
 		spin_lock(&mm->notifier_subscriptions->lock);
 		hlist_add_head_rcu(&subscription->hlist,
-				   &mm->notifier_subscriptions->list);
+				   &mm->notifier_subscriptions->list);			//mmu notifier分支：将subscription与mm->notifier_subscriptions->list关联起来
 		spin_unlock(&mm->notifier_subscriptions->lock);
 	} else
-		mm->notifier_subscriptions->has_itree = true;
+		mm->notifier_subscriptions->has_itree = true;			//mmu_interval_notifier分支：后续将判断该值来决定是否调用mn_itree_invalidate()函数
 
 	mm_drop_all_locks(mm);
 	BUG_ON(atomic_read(&mm->mm_users) <= 0);
@@ -900,13 +911,14 @@ static int __mmu_interval_notifier_insert(
 	 * Note that the representation of the intervals in the interval tree
 	 * considers the ending point as contained in the interval.
 	 */
+	//越界判断，双闭区间[start, start + length - 1]
+	//计算start + length-1，然后赋值给interval_sub->interval_tree.last，如果计算过程中发生溢出，则返回-EOVERFLOW
 	if (length == 0 ||
-	    check_add_overflow(start, length - 1,
-			       &interval_sub->interval_tree.last))
+	    check_add_overflow(start, length - 1,   &interval_sub->interval_tree.last))			
 		return -EOVERFLOW;
 
 	/* Must call with a mmget() held */
-	if (WARN_ON(atomic_read(&mm->mm_users) <= 0))
+	if (WARN_ON(atomic_read(&mm->mm_users) <= 0))					//mm的引用不能为0
 		return -EINVAL;
 
 	/* pairs with mmdrop in mmu_interval_notifier_remove() */
@@ -926,17 +938,19 @@ static int __mmu_interval_notifier_insert(
 	 * odd, see mmu_interval_read_begin()
 	 */
 	spin_lock(&subscriptions->lock);
-	if (subscriptions->active_invalidate_ranges) {
-		if (mn_itree_is_invalidating(subscriptions))
+	if (subscriptions->active_invalidate_ranges) {				//1、如果当前有未完成的invalidate_range_start/end操作
+		if (mn_itree_is_invalidating(subscriptions))			//1.1.1、判断全局seq号，为奇数说明有其他“失效”操作正在进行，则将nterval_sub添加到deferred_list中，等待invalidate_range_end()处理
 			hlist_add_head(&interval_sub->deferred_item,
 				       &subscriptions->deferred_list);
-		else {
+		else {													//1.1.2、否则直接将interval_sub添加到mm->notifier_subscriptions->itree中，并将invalidate_seq置为奇数（表示有interval invalidation正在进行）
 			subscriptions->invalidate_seq |= 1;
 			interval_tree_insert(&interval_sub->interval_tree,
 					     &subscriptions->itree);
 		}
-		interval_sub->invalidate_seq = subscriptions->invalidate_seq;
-	} else {
+		interval_sub->invalidate_seq = subscriptions->invalidate_seq;		//1.2、当前interval notifier的seq值设置为全局（即mm->notifier_subscriptions下）的seq值
+
+
+	} else {													//2、如果当前没有未完成的invalidate_range_start/end操作（不能判断此时的全局seq为偶/奇数）
 		WARN_ON(mn_itree_is_invalidating(subscriptions));
 		/*
 		 * The starting seq for a subscription not under invalidation
@@ -944,10 +958,11 @@ static int __mmu_interval_notifier_insert(
 		 * invalidate_seq should not 'wrap' to the new seq any time
 		 * soon.
 		 */
-		interval_sub->invalidate_seq =
-			subscriptions->invalidate_seq - 1;
+		//为什么非要是-1，因为-1表示是"已经结束的、旧的'失效'操作已经完成"，此时-1这个奇数序列号已经被释放出来了
+		//如果设置为+1，当global seq再次增长的时候很容易就会wrap到+1这个奇数序列号，导致mmu_interval_read_retry()返回true，表示当前interval notifier的seq号已经被wrap了，说明当前interval notifier的seq号已经失效了
+		interval_sub->invalidate_seq =	subscriptions->invalidate_seq - 1;			//2.1、此时全局seq号为偶数，而当前“失效”操作即将进行，因此把当前的seq设置为全局seq-1（奇数）表示正在进行。
 		interval_tree_insert(&interval_sub->interval_tree,
-				     &subscriptions->itree);
+				     &subscriptions->itree);										//2.2、将当前interval_sub插入到mm->notifier_subscriptions->itree中
 	}
 	spin_unlock(&subscriptions->lock);
 	return 0;
@@ -979,10 +994,11 @@ int mmu_interval_notifier_insert(struct mmu_interval_notifier *interval_sub,
 
 	might_lock(&mm->mmap_lock);
 
-	subscriptions = smp_load_acquire(&mm->notifier_subscriptions);
-	if (!subscriptions || !subscriptions->has_itree) {
-		ret = mmu_notifier_register(NULL, mm);
-		if (ret)
+	subscriptions = smp_load_acquire(&mm->notifier_subscriptions);	//1、获取mmu_notifier_subscriptions结构体指针
+
+	if (!subscriptions || !subscriptions->has_itree) {			//2、如果subscriptions为空或未初始化itree，则进行注册
+		ret = mmu_notifier_register(NULL, mm);					//3、这里传入的subscription为NULL，表示注册的是mmu_interval_notifier
+		if (ret)													//3.1、因为后续判断为NULL时，会让mm->notifier_subscriptions->has_itree = true
 			return ret;
 		subscriptions = mm->notifier_subscriptions;
 	}
