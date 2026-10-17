@@ -319,12 +319,12 @@ static bool dmirror_interval_invalidate(struct mmu_interval_notifier *mni,
 	if (range->event == MMU_NOTIFY_MIGRATE && range->owner == dmirror->mdevice)
 		return true;
 
-	if (mmu_notifier_range_blockable(range))				//此次通知请求必须是可阻塞的，如果是non-blockable的，直接返回false
+	if (mmu_notifier_range_blockable(range))				//此次通知请求必须是可阻塞的，如果是non-blockable的，则尝试获锁，获取失败直接返回false
 		mutex_lock(&dmirror->mutex);
 	else if (!mutex_trylock(&dmirror->mutex))
 		return false;
 
-	mmu_interval_set_seq(mni, cur_seq);						//设置当前interval notifier的seq为当前的cur_seq
+	mmu_interval_set_seq(mni, cur_seq);						//(要拿锁，驱动内部锁)设置当前interval notifier的seq为当前的cur_seq
 	dmirror_do_update(dmirror, range->start, range->end);
 
 	mutex_unlock(&dmirror->mutex);

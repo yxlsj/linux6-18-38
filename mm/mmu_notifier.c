@@ -163,7 +163,7 @@ static void mn_itree_inv_end(struct mmu_notifier_subscriptions *subscriptions)
 				  deferred_item) {
 		if (RB_EMPTY_NODE(&interval_sub->interval_tree.rb))
 			interval_tree_insert(&interval_sub->interval_tree,
-					     &subscriptions->itree);
+					     &subscriptions->itree);					//对deferred_list的处理就是将其中的node拿出来添加到itree中
 		else
 			interval_tree_remove(&interval_sub->interval_tree,
 					     &subscriptions->itree);
@@ -171,7 +171,7 @@ static void mn_itree_inv_end(struct mmu_notifier_subscriptions *subscriptions)
 	}
 	spin_unlock(&subscriptions->lock);
 
-	wake_up_all(&subscriptions->wq);
+	wake_up_all(&subscriptions->wq);						//唤醒wait队列中的event。
 }
 
 /**

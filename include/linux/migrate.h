@@ -147,10 +147,10 @@ static inline unsigned long migrate_pfn(unsigned long pfn)
 	return (pfn << MIGRATE_PFN_SHIFT) | MIGRATE_PFN_VALID;
 }
 
-enum migrate_vma_direction {
-	MIGRATE_VMA_SELECT_SYSTEM = 1 << 0,
-	MIGRATE_VMA_SELECT_DEVICE_PRIVATE = 1 << 1,
-	MIGRATE_VMA_SELECT_DEVICE_COHERENT = 1 << 2,
+enum migrate_vma_direction {											
+	MIGRATE_VMA_SELECT_SYSTEM = 1 << 0,						//CPU DRAM迁移到device
+	MIGRATE_VMA_SELECT_DEVICE_PRIVATE = 1 << 1,				//device迁移到CPU DRAM
+	MIGRATE_VMA_SELECT_DEVICE_COHERENT = 1 << 2,			
 };
 
 struct migrate_vma {
