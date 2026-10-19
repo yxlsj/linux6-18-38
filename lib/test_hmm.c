@@ -580,7 +580,7 @@ static int dmirror_allocate_chunk(struct dmirror_device *mdevice,
 	}
 
 	devmem->pagemap.nr_range = 1;
-	devmem->pagemap.ops = &dmirror_devmem_ops;
+	devmem->pagemap.ops = &dmirror_devmem_ops;						//ops和owner赋值
 	devmem->pagemap.owner = mdevice;
 
 	mutex_lock(&mdevice->devmem_lock);
