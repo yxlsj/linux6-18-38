@@ -209,13 +209,16 @@ static int walk_pud_range(p4d_t *p4d, unsigned long addr, unsigned long end,
 				continue;
 		}
 
-		walk->action = ACTION_SUBTREE;
+		walk->action = ACTION_SUBTREE;					//默认的action行为是下探
 
-		if (ops->pud_entry)
+		//pud_entry中，如果要进行pud粒度的页表处理，内部会将walk->action = ACTION_CONTINUE,这样后续就不会继续下探
+		//否则就不会修改walk->action，继续遍历下一级（pmd）
+		if (ops->pud_entry)								
 			err = ops->pud_entry(pud, addr, next, walk);
 		if (err)
 			break;
 
+		//检测action行为。如果是CONTINUE,就循环处理当前层级的每一个entry
 		if (walk->action == ACTION_AGAIN)
 			goto again;
 		if (walk->action == ACTION_CONTINUE)
@@ -237,7 +240,7 @@ static int walk_pud_range(p4d_t *p4d, unsigned long addr, unsigned long end,
 		else if (pud_leaf(*pud) || !pud_present(*pud))
 			continue; /* Nothing to do. */
 
-		err = walk_pmd_range(pud, addr, next, walk);
+		err = walk_pmd_range(pud, addr, next, walk);			//遍历下一层pmd
 		if (err)
 			break;
 
@@ -301,7 +304,7 @@ static int walk_pgd_range(unsigned long addr, unsigned long end,
 		pgd = walk->pgd + pgd_index(addr);
 	else
 		pgd = pgd_offset(walk->mm, addr);
-	do {											//循环遍历每一条pgd表项（512项中的某一项），每个pgd表项的覆盖范围三PGDIR_SIZE(1 << PGDIR_SIZE)，即为2^39/2^48
+	do {											//循环遍历每一条pgd表项（512项中的某一项），每个pgd表项的覆盖范围是PGDIR_SIZE(1 << PGDIR_SIZE)，即为2^39/2^48(p4d)
 
 		next = pgd_addr_end(addr, end);				//next表示当前层级entry的右边界。
 		
@@ -494,25 +497,25 @@ int walk_page_range_mm(struct mm_struct *mm, unsigned long start,
 
 	process_mm_walk_lock(walk.mm, ops->walk_lock);
 
-	vma = find_vma(walk.mm, start);
+	vma = find_vma(walk.mm, start);				//返回的vma不一定是start所在的vma，可能是start之后的vma，
 	do {
-		if (!vma) { /* after the last vma */
+		if (!vma) { /* after the last vma */						//1、如果没有找到vma，则调用驱动的空洞处理函数
 			walk.vma = NULL;
 			next = end;
 			if (ops->pte_hole)
 				err = ops->pte_hole(start, next, -1, &walk);
-		} else if (start < vma->vm_start) { /* outside vma */
+		} else if (start < vma->vm_start) { /* outside vma */		//2、这个分支表示start不在vma中，因此start落在vma之前的空洞区域中，下方的next表示空洞区域的右边界.
 			walk.vma = NULL;
 			next = min(end, vma->vm_start);
 			if (ops->pte_hole)
-				err = ops->pte_hole(start, next, -1, &walk);
+				err = ops->pte_hole(start, next, -1, &walk);		//2.1、空洞处理， -1表示depth未知
 		} else { /* inside vma */
 			process_vma_walk_lock(vma, ops->walk_lock);
 			walk.vma = vma;
 			next = min(end, vma->vm_end);
-			vma = find_vma(mm, vma->vm_end);
+			vma = find_vma(mm, vma->vm_end);				//利用vma是左闭右开区间的特性，直接从vma->vm_end开始查找下一个vma，避免了重复遍历vma链表
 
-			err = walk_page_test(start, next, &walk);		//过滤/跳过不符合要求的VMA
+			err = walk_page_test(start, next, &walk);		//内部调用ops->test_walk，用于过滤/跳过那些驱动不关心的VMA
 			if (err > 0) {
 				/*
 				 * positive return values are purely for

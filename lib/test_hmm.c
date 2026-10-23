@@ -354,7 +354,7 @@ static int dmirror_range_fault(struct dmirror *dmirror,
 		ret = hmm_range_fault(range);
 		mmap_read_unlock(mm);
 		if (ret) {
-			if (ret == -EBUSY)
+			if (ret == -EBUSY)					//hmm_range_fault内部调用mmu_interval_check_retry检测invalidate是否变化，如果变化就会返回-EBUSY,此时需要重试
 				continue;
 			goto out;
 		}

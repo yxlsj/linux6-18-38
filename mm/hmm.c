@@ -32,7 +32,8 @@
 
 struct hmm_vma_walk {
 	struct hmm_range	*range;
-	unsigned long		last;
+	unsigned long		last;				//一般指向range->start，表示下一次调用walk_page_range()时从哪个地址开始
+											//这个字段在walk_page_range过程中是会动态变化的
 };
 
 enum {
@@ -93,6 +94,7 @@ static int hmm_vma_fault(unsigned long addr, unsigned long end,
 	return -EBUSY;
 }
 
+//检查但个pte/page的权限位，看每个pte/page是否有fault请求
 static unsigned int hmm_pte_need_fault(const struct hmm_vma_walk *hmm_vma_walk,
 				       unsigned long pfn_req_flags,
 				       unsigned long cpu_flags)
@@ -109,26 +111,27 @@ static unsigned int hmm_pte_need_fault(const struct hmm_vma_walk *hmm_vma_walk,
 	 * waste to have the user pre-fill the pfn arrays with a default
 	 * flags value.
 	 */
+	//这里的pfn_req_flags就是hmm_pfn[i]
 	pfn_req_flags &= range->pfn_flags_mask;
 	pfn_req_flags |= range->default_flags;
 
 	/* We aren't ask to do anything ... */
-	if (!(pfn_req_flags & HMM_PFN_REQ_FAULT))
+	if (!(pfn_req_flags & HMM_PFN_REQ_FAULT))			//没有fault请求直接返回0
 		return 0;
 
 	/* Need to write fault ? */
 	if ((pfn_req_flags & HMM_PFN_REQ_WRITE) &&
-	    !(cpu_flags & HMM_PFN_WRITE))
+	    !(cpu_flags & HMM_PFN_WRITE))					//在有fault请求的情况下，再次检测有没有write请求，如果满足则返回FAULT + WRITE_FAULT
 		return HMM_NEED_FAULT | HMM_NEED_WRITE_FAULT;
 
 	/* If CPU page table is not valid then we need to fault */
-	if (!(cpu_flags & HMM_PFN_VALID))
+	if (!(cpu_flags & HMM_PFN_VALID))					//如果没有write请求，则最终返回FAULT请求
 		return HMM_NEED_FAULT;
 	return 0;
 }
 
-static unsigned int
-hmm_range_need_fault(const struct hmm_vma_walk *hmm_vma_walk,
+//检测z整个hmm_pfns[]数组的请求request中是否有fault需求
+static unsigned int hmm_range_need_fault(const struct hmm_vma_walk *hmm_vma_walk,
 		     const unsigned long hmm_pfns[], unsigned long npages,
 		     unsigned long cpu_flags)
 {
@@ -141,13 +144,13 @@ hmm_range_need_fault(const struct hmm_vma_walk *hmm_vma_walk,
 	 * not allow for individual pages to be faulted, then
 	 * hmm_pte_need_fault() will always return 0.
 	 */
+
 	if (!((range->default_flags | range->pfn_flags_mask) &
-	      HMM_PFN_REQ_FAULT))
+	      HMM_PFN_REQ_FAULT))								//如果flags中没要要求需要fault，则满足条件直接返回上一级
 		return 0;
 
-	for (i = 0; i < npages; ++i) {
-		required_fault |= hmm_pte_need_fault(hmm_vma_walk, hmm_pfns[i],
-						     cpu_flags);
+	for (i = 0; i < npages; ++i) {							//逐个page检测fault权限位次，只要这些page中的请求包含fault + write fault,就直接返回
+		required_fault |= hmm_pte_need_fault(hmm_vma_walk, hmm_pfns[i], cpu_flags);
 		if (required_fault == HMM_NEED_ALL_BITS)
 			return required_fault;
 	}
@@ -241,7 +244,7 @@ static int hmm_vma_handle_pte(struct mm_walk *walk, unsigned long addr,
 	unsigned int required_fault;
 	unsigned long cpu_flags;
 	pte_t pte = ptep_get(ptep);
-	uint64_t pfn_req_flags = *hmm_pfn;
+	uint64_t pfn_req_flags = *hmm_pfn;			//这里先将hmm_pfn中的数据提取到pfn_req_flags中，作为旧数据
 	uint64_t new_pfn_flags = 0;
 
 	if (pte_none_mostly(pte)) {
@@ -252,6 +255,7 @@ static int hmm_vma_handle_pte(struct mm_walk *walk, unsigned long addr,
 		goto out;
 	}
 
+	//no present分支
 	if (!pte_present(pte)) {
 		swp_entry_t entry = pte_to_swp_entry(pte);
 
@@ -269,8 +273,7 @@ static int hmm_vma_handle_pte(struct mm_walk *walk, unsigned long addr,
 			goto out;
 		}
 
-		required_fault =
-			hmm_pte_need_fault(hmm_vma_walk, pfn_req_flags, 0);
+		required_fault = hmm_pte_need_fault(hmm_vma_walk, pfn_req_flags, 0);
 		if (!required_fault)
 			goto out;
 
@@ -295,9 +298,10 @@ static int hmm_vma_handle_pte(struct mm_walk *walk, unsigned long addr,
 		return -EFAULT;
 	}
 
+
+	//正常分支
 	cpu_flags = pte_to_hmm_pfn_flags(range, pte);
-	required_fault =
-		hmm_pte_need_fault(hmm_vma_walk, pfn_req_flags, cpu_flags);
+	required_fault = hmm_pte_need_fault(hmm_vma_walk, pfn_req_flags, cpu_flags);
 	if (required_fault)
 		goto fault;
 
@@ -305,6 +309,9 @@ static int hmm_vma_handle_pte(struct mm_walk *walk, unsigned long addr,
 	 * Since each architecture defines a struct page for the zero page, just
 	 * fall through and treat it like a normal page.
 	 */
+	//只要不是普通的内存页（即那些没有struct page的内存页），会走下方的if分支
+	//如果想fault强制转换成普通页（但这些page无法变成普通页），就返回-EFAULT；否则就标记为HMM_PFN_ERROR
+	//zero page也会建立struct page，所以排除在外
 	if (!vm_normal_page(walk->vma, addr, pte) &&
 	    !is_zero_pfn(pte_pfn(pte))) {
 		if (hmm_pte_need_fault(hmm_vma_walk, pfn_req_flags, 0)) {
@@ -315,9 +322,11 @@ static int hmm_vma_handle_pte(struct mm_walk *walk, unsigned long addr,
 		goto out;
 	}
 
+	//正常的hmm_pfn输出分支
+	//因为hmm_pfn可以同时作为输入输出对象，因此这里会清理掉request相关的标志，但是HMM_PFN_INOUT_FLAGS是sticky flags不应该因为此处的逻辑而丢失，因此要先加上
 	new_pfn_flags = pte_pfn(pte) | cpu_flags;
 out:
-	*hmm_pfn = (*hmm_pfn & HMM_PFN_INOUT_FLAGS) | new_pfn_flags;
+	*hmm_pfn = (*hmm_pfn & HMM_PFN_INOUT_FLAGS) | new_pfn_flags;			
 	return 0;
 
 fault:
@@ -403,24 +412,25 @@ static int hmm_vma_walk_pmd(pmd_t *pmdp,
 	pmd_t pmd;
 
 again:
-	pmd = pmdp_get_lockless(pmdp);
+	pmd = pmdp_get_lockless(pmdp);										//有mmu notifier保护，无需lock
+
+
 	if (pmd_none(pmd))
 		return hmm_vma_walk_hole(start, end, -1, walk);
 
-	if (thp_migration_supported() && is_pmd_migration_entry(pmd)) {
+	if (thp_migration_supported() && is_pmd_migration_entry(pmd)) {				//1、migrate分支
 		if (hmm_range_need_fault(hmm_vma_walk, hmm_pfns, npages, 0)) {
 			hmm_vma_walk->last = addr;
 			pmd_migration_entry_wait(walk->mm, pmdp);
-			return -EBUSY;
+			return -EBUSY;												//1.1、如果调用者需要fault，HMM则等待PMD migration完成，然后返回-EBUSY让入口(walk_page_range函数)从last再次开始遍历
 		}
-		return hmm_pfns_fill(start, end, range, 0);
+		return hmm_pfns_fill(start, end, range, 0);						//1.2、无需fault，则将标志位填充为0
 	}
 
-	if (!pmd_present(pmd))
-		return hmm_vma_handle_absent_pmd(walk, start, end, hmm_pfns,
-						 pmd);
+	if (!pmd_present(pmd))														//2、非驻留分支
+		return hmm_vma_handle_absent_pmd(walk, start, end, hmm_pfns, pmd);
 
-	if (pmd_trans_huge(pmd)) {
+	if (pmd_trans_huge(pmd)) {													//3、如果pmd是透明大页
 		/*
 		 * No need to take pmd_lock here, even if some other thread
 		 * is splitting the huge pmd we will get that event through
@@ -443,13 +453,13 @@ again:
 	 * entry pointing to pte directory or it is a bad pmd that will not
 	 * recover.
 	 */
-	if (pmd_bad(pmd)) {
+	if (pmd_bad(pmd)) {															//4、bad pmd处理份分支
 		if (hmm_range_need_fault(hmm_vma_walk, hmm_pfns, npages, 0))
 			return -EFAULT;
-		return hmm_pfns_fill(start, end, range, HMM_PFN_ERROR);
+		return hmm_pfns_fill(start, end, range, HMM_PFN_ERROR);					//如果要求fault则返回错误-EFAULT；如果不要求fault则填充HMM_PFN_ERROR
 	}
 
-	ptep = pte_offset_map(pmdp, addr);
+	ptep = pte_offset_map(pmdp, addr);											//5、普通PMD处理分支：进入PTE表
 	if (!ptep)
 		goto again;
 	for (; addr < end; addr += PAGE_SIZE, ptep++, hmm_pfns++) {
@@ -483,16 +493,18 @@ static int hmm_vma_walk_pud(pud_t *pudp, unsigned long start, unsigned long end,
 	struct hmm_range *range = hmm_vma_walk->range;
 	unsigned long addr = start;
 	pud_t pud;
-	spinlock_t *ptl = pud_trans_huge_lock(pudp, walk->vma);
 
-	if (!ptl)
-		return 0;
+	//1、尝试获取pud_huge_lock，如果获取不到就返回walk_page_range路线继续下探
+	//如果获取到了，就以pud页表的粒度（1GB）处理，此时会让walk->action = ACTION_CONTINUE让其不再下探
+	spinlock_t *ptl = pud_trans_huge_lock(pudp, walk->vma);
+	if (!ptl)							
+		return 0;						//返回0,不修改wak->ation的值
 
 	/* Normally we don't want to split the huge page */
-	walk->action = ACTION_CONTINUE;
+	walk->action = ACTION_CONTINUE;		//拿到锁后，将action改为continue，让walk_page_range框架不再下探
 
 	pud = pudp_get(pudp);
-	if (!pud_present(pud)) {
+	if (!pud_present(pud)) {			//2、拿到pud表项，如果是not present，则调用空洞处理
 		spin_unlock(ptl);
 		return hmm_vma_walk_hole(start, end, -1, walk);
 	}
@@ -589,6 +601,10 @@ static int hmm_vma_walk_hugetlb_entry(pte_t *pte, unsigned long hmask,
 #define hmm_vma_walk_hugetlb_entry NULL
 #endif /* CONFIG_HUGETLB_PAGE */
 
+//该函数的主要功能：
+//1、如果当vma的flags不包含VM_IO、VM_PFNMAP，但包含VM_READ（即可读）时，直接返回成功return 0
+//2、上诉条件不满时。当前区间中，只要有一个page的请求中包含HMM_PFN_REQ_FAULT,就返回错误-EFAULT
+//3、
 static int hmm_vma_walk_test(unsigned long start, unsigned long end,
 			     struct mm_walk *walk)
 {
@@ -597,7 +613,7 @@ static int hmm_vma_walk_test(unsigned long start, unsigned long end,
 	struct vm_area_struct *vma = walk->vma;
 
 	if (!(vma->vm_flags & (VM_IO | VM_PFNMAP)) &&
-	    vma->vm_flags & VM_READ)
+	    vma->vm_flags & VM_READ)					//如果flags不包含IO和PFNMAP，且vma是可读的，则该函数直接返回成功
 		return 0;
 
 	/*
@@ -611,13 +627,14 @@ static int hmm_vma_walk_test(unsigned long start, unsigned long end,
 	 * If a fault is requested for an unsupported range then it is a hard
 	 * failure.
 	 */
+	//如果vma不满足上诉要求，则判定调用者是否有fault需求
 	if (hmm_range_need_fault(hmm_vma_walk,
 				 range->hmm_pfns +
 					 ((start - range->start) >> PAGE_SHIFT),
 				 (end - start) >> PAGE_SHIFT, 0))
 		return -EFAULT;
 
-	hmm_pfns_fill(start, end, range, HMM_PFN_ERROR);
+	hmm_pfns_fill(start, end, range, HMM_PFN_ERROR);		//
 
 	/* Skip this vma and continue processing the next vma. */
 	return 1;
@@ -626,9 +643,9 @@ static int hmm_vma_walk_test(unsigned long start, unsigned long end,
 static const struct mm_walk_ops hmm_walk_ops = {
 	.pud_entry	= hmm_vma_walk_pud,
 	.pmd_entry	= hmm_vma_walk_pmd,
-	.pte_hole	= hmm_vma_walk_hole,
+	.pte_hole	= hmm_vma_walk_hole,			//处理页表空洞
 	.hugetlb_entry	= hmm_vma_walk_hugetlb_entry,
-	.test_walk	= hmm_vma_walk_test,
+	.test_walk	= hmm_vma_walk_test,			//检查vma是否适合HMM，HMM不处理VM_IO、VMPFNMAP这种没有普通page backing类型的vma
 	.walk_lock	= PGWALK_RDLOCK,
 };
 
@@ -666,7 +683,7 @@ int hmm_range_fault(struct hmm_range *range)
 	do {
 		/* If range is no longer valid force retry. */
 		if (mmu_interval_check_retry(range->notifier,
-					     range->notifier_seq))
+					     range->notifier_seq))				//检测seq序列号是否发生改变。如果改变则说明其他invalidate操作在进行，此时要返回EBUSY交给上一层处理（上一层执行next loop）
 			return -EBUSY;
 		ret = walk_page_range(mm, hmm_vma_walk.last, range->end,
 				      &hmm_walk_ops, &hmm_vma_walk);
@@ -676,6 +693,9 @@ int hmm_range_fault(struct hmm_range *range)
 		 * in pfns. All entries < last in the pfn array are set to their
 		 * output, and all >= are still at their input values.
 		 */
+		//当walk过程中遇到某些需要等待或者fault的状态，比如migrateion entry时HMM要等待迁移完成。HMM调用handle_mm_fault()后会要求重新walk
+		//此时内部回调会设置hmm_vma_walk.last并且返回-EBUSY。此时检测到返回值等于-EBUSY说明walk不完整则需要继续walk
+		//此时hmm_pfns[]数组已经填入了一部分了，而hmm_vma_walk.last字段表示下一次walk_page_range()应该从哪个地址开始，避免重复回填last之前的hmm_pfns[]数组
 	} while (ret == -EBUSY);
 	return ret;
 }

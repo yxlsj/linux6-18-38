@@ -228,7 +228,8 @@ static int pagemap_range(struct dev_pagemap *pgmap, struct mhp_params *params,
 					params);
 	}
 
-	//成功添加PFN后，将PFN移动到ZONE_DEVICE中
+	//成功添加PFN后，将range包含的返回纳入到ZONE_DEVICE管理范畴之内
+	//这一步不一定会扩大ZONE_DEVICE的管理范围，因为ZONE_DEVICE内部可能会存在空洞区域
 	if (!error) {
 		struct zone *zone;
 

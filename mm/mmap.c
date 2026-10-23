@@ -901,6 +901,7 @@ EXPORT_SYMBOL(find_vma_intersection);
  * Returns: The VMA associated with addr, or the next VMA.
  * May return %NULL in the case of no VMA at addr or above.
  */
+//返回的不一定是addr所在的vma，可能是addr之后的vma
 struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 {
 	unsigned long index = addr;

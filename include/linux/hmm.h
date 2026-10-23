@@ -109,14 +109,17 @@ static inline unsigned int hmm_pfn_to_map_order(unsigned long hmm_pfn)
  * @dev_private_owner: owner of device private pages
  */
 struct hmm_range {
-	struct mmu_interval_notifier *notifier;
-	unsigned long		notifier_seq;
-	unsigned long		start;
+	struct mmu_interval_notifier *notifier;			//interval notifier，解决同步问题
+	unsigned long		notifier_seq;				//seq序列号，供mmu_interval_notifier子系统使用
+	unsigned long		start;						//虚拟地址，左闭右开。[start, end)
 	unsigned long		end;
-	unsigned long		*hmm_pfns;
-	unsigned long		default_flags;
-	unsigned long		pfn_flags_mask;
-	void			*dev_private_owner;
+	unsigned long		*hmm_pfns;					//包含[start,end)范围的pfn数组。该数组可以作为HMM子系统的输入，同时也作为HMM子系统的输出
+
+	//标志位
+	unsigned long		default_flags;				// <整个>range范围的默认请求标志位
+	unsigned long		pfn_flags_mask;				// 允许range中单个或者部分pfn的请求标志位
+
+	void			*dev_private_owner;				//驱动私有字段
 };
 
 /*

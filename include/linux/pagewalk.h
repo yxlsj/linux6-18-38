@@ -119,11 +119,11 @@ enum page_walk_action {
  * (see the comment on walk_page_range() for more details)
  */
 struct mm_walk {
-	const struct mm_walk_ops *ops;
+	const struct mm_walk_ops *ops;				//驱动方的处理回调函数
 	struct mm_struct *mm;
 	pgd_t *pgd;
 	struct vm_area_struct *vma;
-	enum page_walk_action action;
+	enum page_walk_action action;				//下探行为
 	bool no_vma;
 	void *private;
 };
