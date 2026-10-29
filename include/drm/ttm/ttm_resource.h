@@ -35,6 +35,13 @@
 #include <drm/ttm/ttm_caching.h>
 #include <drm/ttm/ttm_kmap_iter.h>
 
+
+/**
+ * 0：可丢弃bo（discardable），一般代表缓存、可重生数据等-------驱逐优先级最高
+ * 1：普通用户态bo，一般代表gem显存、texture、buffeer---------驱逐优先级次之
+ * 2：内核bo（ttm_bo_type_kernel），一般代表页表、ring buffer等数据------驱逐优先级最低
+ * 3：保留reserved
+ */
 #define TTM_MAX_BO_PRIORITY	4U
 #define TTM_NUM_MEM_TYPES 9
 
@@ -87,6 +94,8 @@ static inline bool ttm_lru_item_is_res(const struct ttm_lru_item *item)
 	return item->type == TTM_LRU_RESOURCE;
 }
 
+//1、sys域的实现位于ttm_sys_manager.c中
+//2、amd下gtt和vram的实现是amdgpu_gtt_mgr_func(amdgpu_gtt_mgr.c)和amd_vram_mgr_func(amdgpu_vram_mgr.c)
 struct ttm_resource_manager_func {
 	/**
 	 * struct ttm_resource_manager_func member alloc
@@ -190,21 +199,26 @@ struct ttm_resource_manager {
 	/*
 	 * No protection. Constant from start.
 	 */
-	bool use_type;
-	bool use_tt;
+	bool use_type;											// 是否启用该内存域（VRAM / GTT / SYSTEM）
+	bool use_tt;											// 是否需要 ttm_tt
 	struct ttm_device *bdev;
-	uint64_t size;
+
+	uint64_t size;											//所管理的总字节大小
 	const struct ttm_resource_manager_func *func;			//核心分配回调，根据类型挂载amdgpu_gtt_mgr_func 或 amdgpu_vram_mgr_func
-	spinlock_t move_lock;
+
+	spinlock_t move_lock;									//move fence的锁
 
 	/*
 	 * Protected by @move_lock.
 	 */
-	struct dma_fence *move;
+	//move fence，受move_lock保护
+	//这个fence的使用场景还蛮复杂的，主要目的是防止驱逐过程发生的数据同步问题。
+	struct dma_fence *move;									//move fence
 
 	/*
 	 * Protected by the bdev->lru_lock.
 	 */
+	//该字段受bdev->lru_lock保护
 	struct list_head lru[TTM_MAX_BO_PRIORITY];					//优先级链表，用于挂载各种优先级的ttm_resource（ttm_resource_init函数里面）
 
 	/**

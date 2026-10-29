@@ -888,8 +888,10 @@ s64 ttm_lru_walk_for_evict(struct ttm_lru_walk *walk, struct ttm_device *bdev,
 	s64 progress = 0;
 	s64 lret;
 
+	//以安全的方式遍历每个lru链表中的每个bo（或者说ttm_resource），将符合条件的bo纳入内部处理（遍历候选bo）
+	//---遍历的时候是从lru[0]开始遍历
 	ttm_bo_lru_for_each_reserved_guarded(&cursor, man, &walk->arg, bo) {
-		lret = walk->ops->process_bo(walk, bo);
+		lret = walk->ops->process_bo(walk, bo);				//调用ttm_bo_evict_cb()：该函数执行驱逐evict + 分配alloc
 		if (lret == -EBUSY || lret == -EALREADY)
 			lret = 0;
 		progress = (lret < 0) ? lret : progress + lret;

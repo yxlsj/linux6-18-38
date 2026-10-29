@@ -377,8 +377,7 @@ int ttm_resource_alloc(struct ttm_buffer_object *bo,
 		       struct ttm_resource **res_ptr,
 		       struct dmem_cgroup_pool_state **ret_limit_pool)
 {
-	struct ttm_resource_manager *man =
-		ttm_manager_type(bo->bdev, place->mem_type);
+	struct ttm_resource_manager *man =	ttm_manager_type(bo->bdev, place->mem_type);
 	struct dmem_cgroup_pool_state *pool = NULL;
 	int ret;
 

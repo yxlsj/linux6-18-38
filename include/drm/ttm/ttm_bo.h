@@ -112,7 +112,7 @@ struct ttm_buffer_object {
 	/*
 	* Members not needing protection.
 	*/
-	struct kref kref;
+	struct kref kref;						//引用计数，跟base.refcount作用域不同
 
 	/*
 	 * Members protected by the bo::resv::reserved lock.

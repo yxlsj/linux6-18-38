@@ -480,11 +480,11 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 					tbo->page_alignment);
 	}
 
-	vres = kzalloc(sizeof(*vres), GFP_KERNEL);				//1.1、分配ttm_source等对象
+	vres = kzalloc(sizeof(*vres), GFP_KERNEL);				//1.1、分配ttm_resource等对象
 	if (!vres)
 		return -ENOMEM;
 
-	ttm_resource_init(tbo, place, &vres->base);				//1.2、初始化成员 + 将ttm_source对象挂到manager或者bdev的链表上方便管理
+	ttm_resource_init(tbo, place, &vres->base);				//1.2、初始化成员 + 将ttm_sreource对象挂到manager或者bdev的链表上方便管理
 
 	/* bail out quickly if there's likely not enough VRAM for this BO */
 	if (ttm_resource_manager_usage(man) > max_bytes) {

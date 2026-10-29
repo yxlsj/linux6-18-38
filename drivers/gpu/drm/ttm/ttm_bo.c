@@ -578,6 +578,9 @@ static int ttm_bo_evict_alloc(struct ttm_device *bdev,
 	};
 	s64 lret;
 
+	//驱逐流程非常复杂，暂时没有深入去分析
+	//---该函数主要做了以下内容：遍历lru链表查找候选bo --> 驱逐这些bo  --> 执行分配
+	//---返回值大于0说明驱逐分配成功
 	evict_walk.walk.arg.trylock_only = true;
 	lret = ttm_lru_walk_for_evict(&evict_walk.walk, bdev, man, 1);
 
@@ -669,7 +672,7 @@ static int ttm_bo_add_move_fence(struct ttm_buffer_object *bo,
 	int ret;
 
 	spin_lock(&man->move_lock);
-	fence = dma_fence_get(man->move);
+	fence = dma_fence_get(man->move);				//让dma_fence->ref++,然后返回该fence
 	spin_unlock(&man->move_lock);
 
 	if (!fence)
@@ -678,7 +681,7 @@ static int ttm_bo_add_move_fence(struct ttm_buffer_object *bo,
 	if (no_wait_gpu) {
 		ret = dma_fence_is_signaled(fence) ? 0 : -EBUSY;
 		dma_fence_put(fence);
-		return ret;
+		return ret;				//不等GPU。如果fence已经signed了，则返回成功；否则返回-EBUSY
 	}
 
 	dma_resv_add_fence(bo->base.resv, fence, DMA_RESV_USAGE_KERNEL);
@@ -717,11 +720,13 @@ static int ttm_bo_alloc_resource(struct ttm_buffer_object *bo,
 	struct ww_acquire_ctx *ticket;
 	int i, ret;
 
-	ticket = dma_resv_locking_ctx(bo->base.resv);
-	ret = dma_resv_reserve_fences(bo->base.resv, 1);			//暂时没搞清楚这两句在干嘛，ww_mutex相关的应该是
+	ticket = dma_resv_locking_ctx(bo->base.resv);				//暂时没搞清楚这在干嘛，ww_mutex相关的应该是
+
+	ret = dma_resv_reserve_fences(bo->base.resv, 1);			//预留fence，后续move操作会将dma_resv中添加fence
 	if (unlikely(ret))
 		return ret;
 
+	//遍历每个placement中候选域
 	for (i = 0; i < placement->num_placement; ++i) {
 		const struct ttm_place *place = &placement->placement[i];
 		struct dmem_cgroup_pool_state *limit_pool = NULL;
@@ -733,11 +738,13 @@ static int ttm_bo_alloc_resource(struct ttm_buffer_object *bo,
 			continue;
 
 		if (place->flags & (force_space ? TTM_PL_FLAG_DESIRED :
-				    TTM_PL_FLAG_FALLBACK))						//如果force_space是false，则跳过fallback分配，即只在desired域分配
-			continue;											//如果是true，则跳过desired，即只在fallback中分配
+				    TTM_PL_FLAG_FALLBACK))							//第一轮force_space是false，如果place->flags出现了fallback分配，则跳过该domain
+			continue;												//第二轮开始force_space是true，则跳过desired，即只在fallback中分配
 
-		may_evict = (force_space && place->mem_type != TTM_PL_SYSTEM);
-		ret = ttm_resource_alloc(bo, place, res, force_space ? &limit_pool : NULL);		//内部调用ttm_source_manager->func->alloc分配
+		may_evict = (force_space && place->mem_type != TTM_PL_SYSTEM);		//决定此次调用是否要进行驱逐eviction
+
+
+		ret = ttm_resource_alloc(bo, place, res, force_space ? &limit_pool : NULL);		//1、内部调用ttm_source_manager->func->alloc分配
 		if (ret) {
 			if (ret != -ENOSPC) {
 				dmem_cgroup_pool_state_put(limit_pool);
@@ -749,7 +756,7 @@ static int ttm_bo_alloc_resource(struct ttm_buffer_object *bo,
 			}
 
 			ret = ttm_bo_evict_alloc(bdev, man, place, bo, ctx,
-						 ticket, res, limit_pool);
+						 ticket, res, limit_pool);						//2、ttm_resource_alloc分配失败时，在允许驱逐的情况下，先驱逐再分配
 			dmem_cgroup_pool_state_put(limit_pool);
 			if (ret == -EBUSY)
 				continue;
@@ -757,7 +764,12 @@ static int ttm_bo_alloc_resource(struct ttm_buffer_object *bo,
 				return ret;
 		}
 
-		ret = ttm_bo_add_move_fence(bo, man, ctx->no_wait_gpu);
+		//3、分配成功后，添加move fence
+		//---这里的分配只是在目标domain中开辟一段区域填入resource，此时bo中的数据还没有迁移进入该resource
+		//---因此在迁移操作进行之前，要确保目标domain的数据同步。比如从VRAM的区域A迁移到GTT的区域B中（B可能是一段尚未完成迁移的区域）
+		//---在拷贝至B之前，要确保B上的数据GPU已经没有在使用了，即等待当前fecnce被signed
+		//因此，这里做的事情就是给A添加B的fence依赖，后面执行move迁移操作时之前，要等待该fence完成后再迁移
+		ret = ttm_bo_add_move_fence(bo, man, ctx->no_wait_gpu);			
 		if (unlikely(ret)) {
 			ttm_resource_free(bo, res);
 			if (ret == -EBUSY)
@@ -852,7 +864,7 @@ int ttm_bo_validate(struct ttm_buffer_object *bo,
 		 * stop and the driver will be called to make
 		 * the second hop.
 		 */
-		ret = ttm_bo_alloc_resource(bo, placement, ctx, force_space, &res);		//分配一段新的resource（首次分配会走的路径）
+		ret = ttm_bo_alloc_resource(bo, placement, ctx, force_space, &res);		//分配一段新的resource（此时旧数据还存放在bo->resource中）
 		force_space = !force_space;
 		if (ret == -ENOSPC)
 			continue;
@@ -860,7 +872,7 @@ int ttm_bo_validate(struct ttm_buffer_object *bo,
 			return ret;
 
 bounce:
-		ret = ttm_bo_handle_move_mem(bo, res, false, ctx, &hop);
+		ret = ttm_bo_handle_move_mem(bo, res, false, ctx, &hop);				//将旧数据迁移到新分配的resource中，并让bo指向该resource
 		if (ret == -EMULTIHOP) {
 			ret = ttm_bo_bounce_temp_buffer(bo, ctx, &hop);
 			/* try and move to final place now. */

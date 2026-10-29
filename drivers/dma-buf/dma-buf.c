@@ -700,7 +700,7 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 	if (!try_module_get(exp_info->owner))
 		return ERR_PTR(-ENOENT);
 
-	file = dma_buf_getfile(exp_info->size, exp_info->flags);		//分配anon inode ---> 分配file
+	file = dma_buf_getfile(exp_info->size, exp_info->flags);		//1、分配anon inode ---> 分配file
 	if (IS_ERR(file)) {
 		ret = PTR_ERR(file);
 		goto err_module;
@@ -711,13 +711,13 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 	else
 		/* prevent &dma_buf[1] == dma_buf->resv */
 		alloc_size += 1;
-	dmabuf = kzalloc(alloc_size, GFP_KERNEL);						//分配dmabuf，后续初始化成员
+	dmabuf = kzalloc(alloc_size, GFP_KERNEL);					//2、分配dmabuf（如果dma_resv不存在则分配），后续初始化成员
 	if (!dmabuf) {
 		ret = -ENOMEM;
 		goto err_file;
 	}
 
-	dmabuf->priv = exp_info->priv;
+	dmabuf->priv = exp_info->priv;								//3、将export_info提供的bo挂到dma_buf上
 	dmabuf->ops = exp_info->ops;
 	dmabuf->size = exp_info->size;
 	dmabuf->exp_name = exp_info->exp_name;
@@ -739,13 +739,13 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 	if (ret)
 		goto err_dmabuf;
 
-	file->private_data = dmabuf;					//建立file和dmabuf的联系
+	file->private_data = dmabuf;					//3、建立file和dmabuf的联系
 	file->f_path.dentry->d_fsdata = dmabuf;
-	dmabuf->file = file;							//建立file和dmabuf的联系
+	dmabuf->file = file;							//3、建立file和dmabuf的联系
 
-	__dma_buf_list_add(dmabuf);						//将dmabuf作为node添加到全局链表里面管理
+	__dma_buf_list_add(dmabuf);						//3、将dmabuf作为node添加到全局链表里面管理
 
-	return dmabuf;
+	return dmabuf;									//4、返回dma_buf
 
 err_dmabuf:
 	if (!resv)

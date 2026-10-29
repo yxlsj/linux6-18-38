@@ -217,7 +217,7 @@ struct ttm_device {
 	 * @device_list: Our entry in the global device list.
 	 * Constant after bo device init
 	 */
-	struct list_head device_list;
+	struct list_head device_list;							//当前ttm_device作为entry添加进入global链表中
 
 	/**
 	 * @funcs: Function table for the device.
@@ -249,19 +249,21 @@ struct ttm_device {
 	/**
 	 * @lru_lock: Protection for the per manager LRU and ddestroy lists.
 	 */
-	spinlock_t lru_lock;
+	spinlock_t lru_lock;								//驱逐bo时用到的lru锁
 
 	/**
 	 * @unevictable: Buffer objects which are pinned or swapped and as such
 	 * not on an LRU list.
 	 */
-	struct list_head unevictable;
+	struct list_head unevictable;						//不可驱逐bo会挂在这条链表上（比如被Pin住的bo、已经swap out的bo）
 
 	/**
 	 * @dev_mapping: A pointer to the struct address_space for invalidating
 	 * CPU mappings on buffer move. Protected by load/unload sync.
 	 */
-	struct address_space *dev_mapping;
+	//如果某个bo从SYSTEM迁移到TT，此时物理地址改变了 -> PTE的映射关系改变了
+	//此时就需要该字段去反向找到对于的虚拟地址，然后解除映射。后续其他进程访问该虚拟地址触发fault时再建立正确的映射关系
+	struct address_space *dev_mapping;					//反向映射字段
 
 	/**
 	 * @wq: Work queue structure for the delayed delete workqueue.

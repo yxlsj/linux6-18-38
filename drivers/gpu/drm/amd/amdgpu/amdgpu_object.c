@@ -701,7 +701,7 @@ int amdgpu_bo_create(struct amdgpu_device *adev,
 	else
 		amdgpu_bo_placement_from_domain(bo, bp->domain);
 	if (bp->type == ttm_bo_type_kernel)
-		bo->tbo.priority = 2;													//设置bo驱逐优先级。（目前不太清楚是否是越小越容易被驱逐）
+		bo->tbo.priority = 2;													//设置bo驱逐优先级。（数值越低越容易被驱逐）
 	else if (!(bp->flags & AMDGPU_GEM_CREATE_DISCARDABLE))
 		bo->tbo.priority = 1;
 

@@ -527,7 +527,7 @@ struct dma_buf_export_info {
 	size_t size;
 	int flags;
 	struct dma_resv *resv;
-	void *priv;
+	void *priv;							//一般挂驱动的buffer，比如bo
 };
 
 /**
